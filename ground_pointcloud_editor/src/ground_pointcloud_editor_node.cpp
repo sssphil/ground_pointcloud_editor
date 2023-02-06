@@ -80,6 +80,7 @@ class Ground_PointCloud_Editor{
         std::string transform_axis_;
         double translation_resolution_;
         double rotation_resolution_;
+        bool function_arrow_resolution_;
 
         void cbMapcloud(const sensor_msgs::PointCloud2::ConstPtr& msg);
         void cbKeyBoardClusters(const std_msgs::String::ConstPtr& msg);
@@ -95,8 +96,8 @@ class Ground_PointCloud_Editor{
         void funcSavePC();
         void funcPatchPlanar();
         void funcQueueOperation();
-        void funcTranslate(double);
-        void funcRotate(double);
+        void funcTransformAlongAxis(double, double);
+        void funcChangeResolution(double, double);
 
         void updateSelectedCluster(); //this function should be called whenever a selection is triggered
         void pubCurrentRemainingPC(); //this function should be called whenever a cluster is deleted
@@ -131,8 +132,9 @@ Ground_PointCloud_Editor::Ground_PointCloud_Editor(ros::NodeHandle& nh, ros::Nod
     pub_bb_marker_ = nh_.advertise<visualization_msgs::Marker>("GED_current_aggregated_bbox", 1);
 
     transform_axis_ = "X";  // along X, Y, Z TODO x, y, z (might need TF)
-    translation_resolution_ = 0.1;  // TODO adjust resolution
-    rotation_resolution_ = 0.08726646259;
+    translation_resolution_ = 0.1;
+    rotation_resolution_ = 0.01;
+    function_arrow_resolution_ = false;
 }
 
 Ground_PointCloud_Editor::~Ground_PointCloud_Editor(){
@@ -445,19 +447,21 @@ void Ground_PointCloud_Editor::funcPatchPlanar(){
 
 }
 
-void Ground_PointCloud_Editor::funcTranslate(double res){
+void Ground_PointCloud_Editor::funcTransformAlongAxis(double tran, double rot){
   // TODO EnQueue transformation, and use "Z"/"X"
   // TODO along XYZ and xyz
 
-  double translate_x_ = 0, translate_y_ =0, translate_z_ = 0;
   if (strstr(transform_axis_.c_str(),"X") || strstr(transform_axis_.c_str(),"x")){
-    translate_x_ = res;
+    translate_x_ = tran;
+    rotate_around_x_ = rot;
   }
   else if (strstr(transform_axis_.c_str(),"Y") || strstr(transform_axis_.c_str(),"y")){
-    translate_y_ = res;
+    translate_y_ = tran;
+    rotate_around_y_ = rot;
   }
   else if (strstr(transform_axis_.c_str(),"Z") || strstr(transform_axis_.c_str(),"z")){
-    translate_z_ = res;
+    translate_z_ = tran;
+    rotate_around_z_ = rot;
   }
 
   /*  Using a Affine3f
@@ -476,40 +480,9 @@ void Ground_PointCloud_Editor::funcTranslate(double res){
   pubCurrentRemainingPC();
 }
 
-void Ground_PointCloud_Editor::funcRotate(double res){
-  // TODO EnQueue transformation, and use "Z"/"X"
-  // TODO along XYZ and xyz
-
-  double rotate_around_x_ = 0, rotate_around_y_ =0, rotate_around_z_ = 0;
-  if (strstr(transform_axis_.c_str(),"X") || strstr(transform_axis_.c_str(),"x")){
-    rotate_around_x_ = res;
-  }
-  else if (strstr(transform_axis_.c_str(),"Y") || strstr(transform_axis_.c_str(),"y")){
-    rotate_around_y_ = res;
-  }
-  else if (strstr(transform_axis_.c_str(),"Z") || strstr(transform_axis_.c_str(),"z")){
-    rotate_around_z_ = res;
-  }
-
-  /*  Using a Affine3f
-    This method is easier and less error prone
-  */
-  Eigen::Affine3f transform_2 = Eigen::Affine3f::Identity();
-
-  // The same rotation matrix as before; theta radians around X axis
-  if(fabs(rotate_around_x_)>0.01)
-    transform_2.rotate (Eigen::AngleAxisf (rotate_around_x_, Eigen::Vector3f::UnitX()));
-  if(fabs(rotate_around_y_)>0.01)
-    transform_2.rotate (Eigen::AngleAxisf (rotate_around_y_, Eigen::Vector3f::UnitY()));
-  if(fabs(rotate_around_z_)>0.01)
-    transform_2.rotate (Eigen::AngleAxisf (rotate_around_z_, Eigen::Vector3f::UnitZ()));  
-
-  // apply transform
-  pcl::transformPointCloud (*pc_original_z_up_, *pc_original_z_up_, transform_2);
-
-  pub_raw_pc_.publish(pc_original_z_up_);
-
-  pubCurrentRemainingPC();
+void Ground_PointCloud_Editor::funcChangeResolution(double tran, double rot){
+  translation_resolution_ += tran;
+  rotation_resolution_ += rot;
 }
 
 void Ground_PointCloud_Editor::cbKeyBoardPoints(const std_msgs::String::ConstPtr& msg){
@@ -544,38 +517,69 @@ void Ground_PointCloud_Editor::cbKeyBoardPoints(const std_msgs::String::ConstPtr
   }
   else if ( strstr(msg->data.c_str(),"\x13") ){
     // up arrow
-    ROS_WARN("Detect %s, translate along +%s.",msg->data.c_str(), transform_axis_.c_str());
-    funcTranslate(translation_resolution_);
+    if (function_arrow_resolution_){
+      funcChangeResolution(0.01, 0);
+      ROS_WARN("Detect %s, adjusting translation resolution to %f.",msg->data.c_str(), translation_resolution_);
+    }
+    else{
+      ROS_WARN("Detect %s, translate along +%s.",msg->data.c_str(), transform_axis_.c_str());
+      funcTransformAlongAxis(translation_resolution_, 0);
+    }
   }
   else if ( strstr(msg->data.c_str(),"\x15") ){
     // down arrow
-    ROS_WARN("Detect %s, translate along -%s.",msg->data.c_str(), transform_axis_.c_str());
-    funcTranslate(-translation_resolution_);
+    if (function_arrow_resolution_){
+      funcChangeResolution(-0.01, 0);
+      ROS_WARN("Detect %s, adjusting translation resolution to %f.",msg->data.c_str(), translation_resolution_);
+    }
+    else{
+      ROS_WARN("Detect %s, translate along -%s.",msg->data.c_str(), transform_axis_.c_str());
+      funcTransformAlongAxis(-translation_resolution_, 0);
+    }
   }
   else if ( strstr(msg->data.c_str(),"\x12") ){
     // left arrow
-    ROS_WARN("Detect %s, rotate along +%s.",msg->data.c_str(), transform_axis_.c_str());
-    funcRotate(rotation_resolution_);
+    if (function_arrow_resolution_){
+      funcChangeResolution(0, 0.01);
+      ROS_WARN("Detect %s, adjusting rotation resolution to %f.",msg->data.c_str(), rotation_resolution_);
+    }
+    else{
+      ROS_WARN("Detect %s, rotate along +%s.",msg->data.c_str(), transform_axis_.c_str());
+      funcTransformAlongAxis(0, rotation_resolution_);
+    }
   }
   else if ( strstr(msg->data.c_str(),"\x14") ){
     // right arrow
-    ROS_WARN("Detect %s, rotate along -%s.",msg->data.c_str(), transform_axis_.c_str());
-    funcRotate(-rotation_resolution_);
+    if (function_arrow_resolution_){
+      funcChangeResolution(0, -0.01);
+      ROS_WARN("Detect %s, adjusting rotation resolution to %f.",msg->data.c_str(), rotation_resolution_);
+    }
+    else{
+      ROS_WARN("Detect %s, rotate along -%s.",msg->data.c_str(), transform_axis_.c_str());
+      funcTransformAlongAxis(0, -rotation_resolution_);
+    }
   }
   else if ( strstr(msg->data.c_str(),",") ){
     // up arrow
     ROS_WARN("Detect %s, selecting X, use up/down for translation, left/right for rotation.",msg->data.c_str());
     transform_axis_ = "X";
+    function_arrow_resolution_ = false;
   }
   else if ( strstr(msg->data.c_str(),".") ){
     // up arrow
     ROS_WARN("Detect %s, selecting Y, use up/down for translation, left/right for rotation.",msg->data.c_str());
     transform_axis_ = "Y";
+    function_arrow_resolution_ = false;
   }
   else if ( strstr(msg->data.c_str(),"/") ){
     // up arrow
     ROS_WARN("Detect %s, selecting Z, use up/down for translation, left/right for rotation.",msg->data.c_str());
     transform_axis_ = "Z";
+    function_arrow_resolution_ = false;
+  }else if ( strstr(msg->data.c_str(),";") ){
+    // up arrow
+    ROS_WARN("Detect %s, changing transformation resolution, use up/down for translation, left/right for rotation.",msg->data.c_str());
+    function_arrow_resolution_ = true;
   }
 
   
