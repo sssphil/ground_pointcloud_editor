@@ -76,6 +76,11 @@ class Ground_PointCloud_Editor{
         double rotate_around_x_, rotate_around_y_, rotate_around_z_;
         double translate_x_, translate_y_, translate_z_;
 
+        // keyboard transformation
+        std::string transform_axis_;
+        double translation_resolution_;
+        double rotation_resolution_;
+
         void cbMapcloud(const sensor_msgs::PointCloud2::ConstPtr& msg);
         void cbKeyBoardClusters(const std_msgs::String::ConstPtr& msg);
         void cbKeyBoardPoints(const std_msgs::String::ConstPtr& msg);
@@ -90,6 +95,8 @@ class Ground_PointCloud_Editor{
         void funcSavePC();
         void funcPatchPlanar();
         void funcQueueOperation();
+        void funcTranslate(double);
+        void funcRotate(double);
 
         void updateSelectedCluster(); //this function should be called whenever a selection is triggered
         void pubCurrentRemainingPC(); //this function should be called whenever a cluster is deleted
@@ -99,12 +106,12 @@ Ground_PointCloud_Editor::Ground_PointCloud_Editor(ros::NodeHandle& nh, ros::Nod
     nh_ = nh;
     pnh_ = pnh;
 
-    pnh_.param("rotate_around_x", rotate_around_x_, 0.0);
-    pnh_.param("rotate_around_y", rotate_around_y_, 0.0);
-    pnh_.param("rotate_around_z", rotate_around_z_, 0.0);
-    pnh_.param("translate_x", translate_x_, 0.0);
-    pnh_.param("translate_y", translate_y_, 0.0);
-    pnh_.param("translate_z", translate_z_, 0.0);
+    pnh_.param("rotate_around_x_", rotate_around_x_, 0.0);
+    pnh_.param("rotate_around_y_", rotate_around_y_, 0.0);
+    pnh_.param("rotate_around_z_", rotate_around_z_, 0.0);
+    pnh_.param("translate_x_", translate_x_, 0.0);
+    pnh_.param("translate_y_", translate_y_, 0.0);
+    pnh_.param("translate_z_", translate_z_, 0.0);
 
     global_frame_ = std::string("map");
 
@@ -123,6 +130,9 @@ Ground_PointCloud_Editor::Ground_PointCloud_Editor(ros::NodeHandle& nh, ros::Nod
     pub_op_current_aggregated_pc_ = pnh_.advertise<sensor_msgs::PointCloud2>("GED_current_selected_points", 2, true);
     pub_bb_marker_ = nh_.advertise<visualization_msgs::Marker>("GED_current_aggregated_bbox", 1);
 
+    transform_axis_ = "X";  // along X, Y, Z TODO x, y, z (might need TF)
+    translation_resolution_ = 0.1;  // TODO adjust resolution
+    rotation_resolution_ = 0.08726646259;
 }
 
 Ground_PointCloud_Editor::~Ground_PointCloud_Editor(){
@@ -435,6 +445,73 @@ void Ground_PointCloud_Editor::funcPatchPlanar(){
 
 }
 
+void Ground_PointCloud_Editor::funcTranslate(double res){
+  // TODO EnQueue transformation, and use "Z"/"X"
+  // TODO along XYZ and xyz
+
+  double translate_x_ = 0, translate_y_ =0, translate_z_ = 0;
+  if (strstr(transform_axis_.c_str(),"X") || strstr(transform_axis_.c_str(),"x")){
+    translate_x_ = res;
+  }
+  else if (strstr(transform_axis_.c_str(),"Y") || strstr(transform_axis_.c_str(),"y")){
+    translate_y_ = res;
+  }
+  else if (strstr(transform_axis_.c_str(),"Z") || strstr(transform_axis_.c_str(),"z")){
+    translate_z_ = res;
+  }
+
+  /*  Using a Affine3f
+    This method is easier and less error prone
+  */
+  Eigen::Affine3f transform_2 = Eigen::Affine3f::Identity();
+
+  // Define a translation of 0.0 meters on the axis.
+  transform_2.translation() << translate_x_, translate_y_, translate_z_;
+
+  // apply transform
+  pcl::transformPointCloud (*pc_original_z_up_, *pc_original_z_up_, transform_2);
+
+  pub_raw_pc_.publish(pc_original_z_up_);
+
+  pubCurrentRemainingPC();
+}
+
+void Ground_PointCloud_Editor::funcRotate(double res){
+  // TODO EnQueue transformation, and use "Z"/"X"
+  // TODO along XYZ and xyz
+
+  double rotate_around_x_ = 0, rotate_around_y_ =0, rotate_around_z_ = 0;
+  if (strstr(transform_axis_.c_str(),"X") || strstr(transform_axis_.c_str(),"x")){
+    rotate_around_x_ = res;
+  }
+  else if (strstr(transform_axis_.c_str(),"Y") || strstr(transform_axis_.c_str(),"y")){
+    rotate_around_y_ = res;
+  }
+  else if (strstr(transform_axis_.c_str(),"Z") || strstr(transform_axis_.c_str(),"z")){
+    rotate_around_z_ = res;
+  }
+
+  /*  Using a Affine3f
+    This method is easier and less error prone
+  */
+  Eigen::Affine3f transform_2 = Eigen::Affine3f::Identity();
+
+  // The same rotation matrix as before; theta radians around X axis
+  if(fabs(rotate_around_x_)>0.01)
+    transform_2.rotate (Eigen::AngleAxisf (rotate_around_x_, Eigen::Vector3f::UnitX()));
+  if(fabs(rotate_around_y_)>0.01)
+    transform_2.rotate (Eigen::AngleAxisf (rotate_around_y_, Eigen::Vector3f::UnitY()));
+  if(fabs(rotate_around_z_)>0.01)
+    transform_2.rotate (Eigen::AngleAxisf (rotate_around_z_, Eigen::Vector3f::UnitZ()));  
+
+  // apply transform
+  pcl::transformPointCloud (*pc_original_z_up_, *pc_original_z_up_, transform_2);
+
+  pub_raw_pc_.publish(pc_original_z_up_);
+
+  pubCurrentRemainingPC();
+}
+
 void Ground_PointCloud_Editor::cbKeyBoardPoints(const std_msgs::String::ConstPtr& msg){
 
   if( strstr(msg->data.c_str(),"p") || strstr(msg->data.c_str(),"P") ){
@@ -464,6 +541,41 @@ void Ground_PointCloud_Editor::cbKeyBoardPoints(const std_msgs::String::ConstPtr
   else if( strstr(msg->data.c_str(),"Z") || strstr(msg->data.c_str(),"z") ){
     ROS_WARN("Detect %s, back to last step.",msg->data.c_str());
     funcLastStep();
+  }
+  else if ( strstr(msg->data.c_str(),"\x13") ){
+    // up arrow
+    ROS_WARN("Detect %s, translate along +%s.",msg->data.c_str(), transform_axis_.c_str());
+    funcTranslate(translation_resolution_);
+  }
+  else if ( strstr(msg->data.c_str(),"\x15") ){
+    // down arrow
+    ROS_WARN("Detect %s, translate along -%s.",msg->data.c_str(), transform_axis_.c_str());
+    funcTranslate(-translation_resolution_);
+  }
+  else if ( strstr(msg->data.c_str(),"\x12") ){
+    // left arrow
+    ROS_WARN("Detect %s, rotate along +%s.",msg->data.c_str(), transform_axis_.c_str());
+    funcRotate(rotation_resolution_);
+  }
+  else if ( strstr(msg->data.c_str(),"\x14") ){
+    // right arrow
+    ROS_WARN("Detect %s, rotate along -%s.",msg->data.c_str(), transform_axis_.c_str());
+    funcRotate(-rotation_resolution_);
+  }
+  else if ( strstr(msg->data.c_str(),",") ){
+    // up arrow
+    ROS_WARN("Detect %s, selecting X, use up/down for translation, left/right for rotation.",msg->data.c_str());
+    transform_axis_ = "X";
+  }
+  else if ( strstr(msg->data.c_str(),".") ){
+    // up arrow
+    ROS_WARN("Detect %s, selecting Y, use up/down for translation, left/right for rotation.",msg->data.c_str());
+    transform_axis_ = "Y";
+  }
+  else if ( strstr(msg->data.c_str(),"/") ){
+    // up arrow
+    ROS_WARN("Detect %s, selecting Z, use up/down for translation, left/right for rotation.",msg->data.c_str());
+    transform_axis_ = "Z";
   }
 
   
